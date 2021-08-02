@@ -1,0 +1,3 @@
+[submodule "fcn"]
+	path = fcn
+	url = git@github.com:niqbal996/Pytorch-UNet.git
