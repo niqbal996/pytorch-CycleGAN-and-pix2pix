@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
-
+from fcn.unet import UNet
 
 ###############################################################################
 # Helper Functions
@@ -116,6 +116,15 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     return net
 
 
+def define_fcn(input_nc, classes, device, weights_path=None):
+    net = UNet(n_channels=input_nc, n_classes=classes, bilinear=True)
+    if weights_path is not None:
+            net.load_state_dict(
+                torch.load(weights_path, map_location=device)
+            )
+    net.to(device=device)
+
+    return net
 def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
     """Create a generator
 
@@ -273,7 +282,6 @@ class GANLoss(nn.Module):
             else:
                 loss = prediction.mean()
         return loss
-
 
 def cal_gradient_penalty(netD, real_data, fake_data, device, type='mixed', constant=1.0, lambda_gp=10.0):
     """Calculate the gradient penalty loss, used in WGAN-GP paper https://arxiv.org/abs/1704.00028
