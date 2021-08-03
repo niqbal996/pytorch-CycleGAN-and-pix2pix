@@ -3,7 +3,7 @@ import itertools
 from util.image_pool import ImagePool
 from .base_model import BaseModel
 from . import networks
-
+from fcn.unet import UNet
 
 class CycleGANModel(BaseModel):
     """
@@ -63,7 +63,7 @@ class CycleGANModel(BaseModel):
         self.visual_names = visual_names_A + visual_names_B  # combine visualizations for A and B
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>.
         if self.isTrain:
-            self.model_names = ['G_A', 'G_B', 'D_A', 'D_B']
+            self.model_names = ['G_A', 'G_B', 'D_A', 'D_B', 'f_a', 'f_b']
         else:  # during test time, only load Gs
             self.model_names = ['G_A', 'G_B']
 
@@ -74,6 +74,9 @@ class CycleGANModel(BaseModel):
                                         not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
         self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf, opt.netG, opt.norm,
                                         not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+
+        self.netf_a = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='./checkpoints/unet_epoch15.pth')
+        self.netf_b = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='./checkpoints/unet_epoch15.pth')
 
         if self.isTrain:  # define discriminators
             self.netD_A = networks.define_D(opt.output_nc, opt.ndf, opt.netD,
@@ -89,12 +92,17 @@ class CycleGANModel(BaseModel):
             # define loss functions
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)  # define GAN loss.
             self.criterionCycle = torch.nn.L1Loss()
+            self.segmentation_loss = torch.nn.CrossEntropyLoss()
             self.criterionIdt = torch.nn.L1Loss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), lr=opt.lr, betas=(opt.beta1, 0.999))
+            self.optimizer_f = torch.optim.RMSprop(self.netf_b.parameters(), lr=0.001, weight_decay=1e-8, momentum=0.9)
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer_f, 'min' if self.netf_b.n_classes > 1 else 'max',
+                                                             patience=2)
             self.optimizer_D = torch.optim.Adam(itertools.chain(self.netD_A.parameters(), self.netD_B.parameters()), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
+            self.optimizers.append(self.optimizer_f)
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -107,14 +115,22 @@ class CycleGANModel(BaseModel):
         AtoB = self.opt.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
+        self.label_A = input['A_masks']
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
         self.fake_B = self.netG_A(self.real_A)  # G_A(A)
         self.rec_A = self.netG_B(self.fake_B)   # G_B(G_A(A))
-        self.fake_A = self.netG_B(self.real_B)  # G_B(B)
+        self.fake_A = self.netG_B(self.real_B)  # G_B(B) -> F(y)
         self.rec_B = self.netG_A(self.fake_A)   # G_A(G_B(B))
+
+
+        self.s_G_x = self.netf_b(self.fake_B)
+        self.s_Y = self.netf_b(self.real_B)
+        self.s_F_y = self.netf_a(self.fake_A)
+        self.s_G_F_y = self.netf_b(self.rec_B)
+        self.s_F_G_x = self.netf_a(self.rec_A)  # fx(F(G(x))) -> s_F(G(x))
 
     def backward_D_basic(self, netD, real, fake):
         """Calculate GAN loss for the discriminator
@@ -174,7 +190,14 @@ class CycleGANModel(BaseModel):
         # Backward cycle loss || G_A(G_B(B)) - B||
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
         # combined loss and calculate gradients
-        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
+
+        # segmentation losses
+        self.L_iou_1 = self.segmentation_loss(self.s_G_x, self.label_A)
+        self.L_iou_2 = self.segmentation_loss(self.s_F_G_x, self.label_A)
+        self.L_iou_3 = self.segmentation_loss(self.s_Y, self.s_F_y)
+        self.L_iou_4 = self.segmentation_loss(self.s_G_F_y, self.s_F_y)
+        self.L_iou = self.L_iou_1 + self.L_iou_2 + self.L_iou_3 + self.L_iou_4
+        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B + self.L_iou
         self.loss_G.backward()
 
     def optimize_parameters(self):
