@@ -2,6 +2,7 @@ import torch
 import itertools
 from util.image_pool import ImagePool
 from .base_model import BaseModel
+import numpy as np
 from . import networks
 from fcn.unet import UNet
 
@@ -75,8 +76,8 @@ class CycleGANModel(BaseModel):
         self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf, opt.netG, opt.norm,
                                         not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
 
-        self.netf_a = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='./checkpoints/unet_epoch15.pth')
-        self.netf_b = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='./checkpoints/unet_epoch15.pth')
+        self.netf_a = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='/home/naeem/git/pytorch-CycleGAN-and-pix2pix/fcn/checkpoints/CP_epoch6.pth')
+        self.netf_b = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='/home/naeem/git/pytorch-CycleGAN-and-pix2pix/fcn/checkpoints/CP_epoch6.pth')
 
         if self.isTrain:  # define discriminators
             self.netD_A = networks.define_D(opt.output_nc, opt.ndf, opt.netD,
@@ -115,7 +116,7 @@ class CycleGANModel(BaseModel):
         AtoB = self.opt.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
-        self.label_A = input['A_masks']
+        self.label_A = input['A_masks'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
@@ -192,10 +193,10 @@ class CycleGANModel(BaseModel):
         # combined loss and calculate gradients
 
         # segmentation losses
-        self.L_iou_1 = self.segmentation_loss(self.s_G_x, self.label_A)
-        self.L_iou_2 = self.segmentation_loss(self.s_F_G_x, self.label_A)
-        self.L_iou_3 = self.segmentation_loss(self.s_Y, self.s_F_y)
-        self.L_iou_4 = self.segmentation_loss(self.s_G_F_y, self.s_F_y)
+        self.L_iou_1 = self.segmentation_loss(self.s_G_x, self.label_A.long().squeeze(1))
+        self.L_iou_2 = self.segmentation_loss(self.s_F_G_x, self.label_A.long().squeeze(1))
+        self.L_iou_3 = self.segmentation_loss(self.s_Y, torch.argmax(self.s_F_y.long(), dim=1))
+        self.L_iou_4 = self.segmentation_loss(self.s_G_F_y, torch.argmax(self.s_F_y.long(), dim=1))
         self.L_iou = self.L_iou_1 + self.L_iou_2 + self.L_iou_3 + self.L_iou_4
         self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B + self.L_iou
         self.loss_G.backward()
@@ -205,7 +206,7 @@ class CycleGANModel(BaseModel):
         # forward
         self.forward()      # compute fake images and reconstruction images.
         # G_A and G_B
-        self.set_requires_grad([self.netD_A, self.netD_B], False)  # Ds require no gradients when optimizing Gs
+        self.set_requires_grad([self.netD_A, self.netD_B, self.netf_b], False)  # Ds require no gradients when optimizing Gs
         self.optimizer_G.zero_grad()  # set G_A and G_B's gradients to zero
         self.backward_G()             # calculate gradients for G_A and G_B
         self.optimizer_G.step()       # update G_A and G_B's weights
