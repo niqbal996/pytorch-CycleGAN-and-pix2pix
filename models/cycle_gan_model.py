@@ -76,9 +76,11 @@ class CycleGANModel(BaseModel):
         self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf, opt.netG, opt.norm,
                                         not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
 
-        self.netf_a = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='/home/naeem/git/pytorch-CycleGAN-and-pix2pix/fcn/checkpoints/CP_epoch6.pth')
-        self.netf_b = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='/home/naeem/git/pytorch-CycleGAN-and-pix2pix/fcn/checkpoints/CP_epoch6.pth')
-
+        self.netf_a = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='checkpoints/sugarbeet/CP_epoch5.pth')
+        self.netf_b = networks.define_fcn(opt.input_nc, classes=3, device=self.device, weights_path='checkpoints/sugarbeet/CP_epoch5.pth')
+        # The host domain FCN is already trained and optimized. We do not want to train it again. Do i set the grads
+        # to false or set it to eval() would be enough?
+        self.netf_a.eval()
         if self.isTrain:  # define discriminators
             self.netD_A = networks.define_D(opt.output_nc, opt.ndf, opt.netD,
                                             opt.n_layers_D, opt.norm, opt.init_type, opt.init_gain, self.gpu_ids)
@@ -97,6 +99,7 @@ class CycleGANModel(BaseModel):
             self.criterionIdt = torch.nn.L1Loss()
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()), lr=opt.lr, betas=(opt.beta1, 0.999))
+            # TODO should i use the adam for FCN as well????  as per the author.
             self.optimizer_f = torch.optim.RMSprop(self.netf_b.parameters(), lr=0.001, weight_decay=1e-8, momentum=0.9)
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer_f, 'min' if self.netf_b.n_classes > 1 else 'max',
                                                              patience=2)
