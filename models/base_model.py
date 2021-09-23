@@ -154,8 +154,12 @@ class BaseModel(ABC):
                 net = getattr(self, 'net' + name)
 
                 if len(self.gpu_ids) > 0 and torch.cuda.is_available():
-                    torch.save(net.module.cpu().state_dict(), save_path)
-                    net.cuda(self.gpu_ids[0])
+                    # UNet FCN was trained on a single GPU
+                    if net.name == 'UNet':
+                        torch.save(net.cpu().state_dict(), save_path)
+                    else:
+                        torch.save(net.module.cpu().state_dict(), save_path)
+                        net.cuda(self.gpu_ids[0])
                 else:
                     torch.save(net.cpu().state_dict(), save_path)
 
